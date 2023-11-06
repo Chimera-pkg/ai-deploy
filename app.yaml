@@ -1,0 +1,6 @@
+runtime: python39
+instance_class: F2
+entrypoint: uvicorn main:app --host=0.0.0.0 --port=8080
+
+runtime_config:
+  python_version: 3.9
