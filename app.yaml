@@ -1,6 +1,15 @@
-runtime: python39
+runtime: python38
+entrypoint: gunicorn -b :$PORT main:app
 instance_class: F2
-entrypoint: uvicorn main:app --host=0.0.0.0 --port=8080
 
-runtime_config:
-  python_version: 3.9
+env_variables:
+  MODEL_PATH: 'models/best_rdd_final.pt'
+
+automatic_scaling:
+  target_cpu_utilization: 0.65
+
+handlers:
+  - url: /static
+    static_dir: static/
+  - url: /.*
+    script: auto
