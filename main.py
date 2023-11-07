@@ -1,9 +1,7 @@
 import os
-import flask
 from flask import Flask, request, jsonify
 from helpers import load_model, process_image, process_video
 from urllib.parse import quote
-import fileapp
 from google.cloud import storage
 import os
 import io
