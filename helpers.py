@@ -5,6 +5,7 @@ from PIL import Image
 from ultralytics import YOLO
 import tempfile
 from google.cloud import storage
+from google.cloud.storage.blob import Blob  # Corrected import
 import os
 from io import BytesIO
 import io
@@ -106,18 +107,6 @@ def process_image(model, image_filename, image_output_filename):
         'image_output_link': blob.public_url,
         'json_output_link': json_blob.public_url
     }
- 
-def save_summary_image(objects_detected, json_output_path):
-    # Create a temporary directory for the image
-    tmp_dir = tempfile.mkdtemp()
-    
-    # Ensure that the directory where the JSON file will be saved exists
-    os.makedirs(os.path.dirname(json_output_path), exist_ok=True)
-
-    # Create the full path to the JSON file in the temporary directory
-    json_output_path = os.path.join(tmp_dir, json_output_path)
-    with open(json_output_path, 'w') as json_file:
-        json.dump(objects_detected, json_file, indent=4)
 
 # def process_video(model, video_filename, video_output_path, bucket_name):
 #     # Download the video from Google Cloud Storage
@@ -186,25 +175,59 @@ def save_summary_image(objects_detected, json_output_path):
 #         'video_output_link': video_output_link
 #     }
 
-def process_video(model, video_filename, video_output_path, bucket_name):
-    # Download the video from Google Cloud Storage
-    download_from_cloud_storage(video_filename, video_output_path, bucket_name)
+def upload_to_cloud_storage(local_path, bucket_name, cloud_path):
+    """Upload a file to Google Cloud Storage.
 
-    cap = cv2.VideoCapture(video_output_path)
-    success, frame = cap.read()
-    H, W, _ = frame.shape
+    Args:
+        local_path (str): The local file path to be uploaded.
+        bucket_name (str): The name of the Google Cloud Storage bucket.
+        cloud_path (str): The destination path in the cloud storage bucket.
 
+    Returns:
+        str: The public URL of the uploaded file.
+    """
     # Initialize the Google Cloud Storage client
     storage_client = storage.Client.from_service_account_json('roads-404204.json')
 
-    # Specify the bucket where your videos are stored
+    # Specify the bucket where the file will be stored
     bucket = storage_client.bucket(bucket_name)
 
-    out = cv2.VideoWriter(video_output_path, cv2.VideoWriter_fourcc(*'XVID'), int(cap.get(cv2.CAP_PROP_FPS)), (W, H))
+    # Create a GCS blob and upload the file
+    blob = Blob(cloud_path, bucket)
+    with open(local_path, "rb") as file:
+        blob.upload_from_file(file, content_type='application/octet-stream')
+
+    # Set the object's ACL to make it publicly accessible
+    blob.acl.all(). grant_read()
+    blob.acl.save()
+
+    # Return the public URL of the uploaded file
+    return blob.public_url
+
+
+def process_video(model, video_filename, video_output_path, bucket_name):
+    # Create a temporary directory for the video
+    tmp_dir = tempfile.mkdtemp()
+
+    # Define the local file path for the downloaded video
+    local_video_path = os.path.join(tmp_dir, video_filename)
+
+    # Download the video from Google Cloud Storage
+    download_from_cloud_storage(video_filename, local_video_path, bucket_name)
+
+    cap = cv2.VideoCapture(local_video_path)
+    success, frame = cap.read()
+    H, W, _ = frame.shape
 
     objects_detected_list = []
     last_objects_detected = {}
     frame_count = 0
+
+    # Use the same temporary directory for video output
+    local_video_output_path = os.path.join(tmp_dir, video_output_path)
+
+    # Define the VideoWriter 'out' here
+    out = cv2.VideoWriter(local_video_output_path, cv2.VideoWriter_fourcc(*'XVID'), int(cap.get(cv2.CAP_PROP_FPS)), (W, H))
 
     while cap is not None and cap.isOpened():
         success, frame = cap.read()
@@ -252,24 +275,33 @@ def process_video(model, video_filename, video_output_path, bucket_name):
     out.release()
     cv2.destroyAllWindows()
 
-    # Create a temporary directory for video output
-    tmp_dir = tempfile.mkdtemp()
+    # Initialize the Google Cloud Storage client
+    storage_client = storage.Client.from_service_account_json('roads-404204.json')
 
-    # Create a local path for video output
-    local_video_output_path = os.path.join(tmp_dir, video_output_path)
+    # Specify the bucket where your videos are stored
+    bucket = storage_client.bucket(bucket_name)
+
+    # Read the annotated video from the local file
+    with open(local_video_output_path, 'rb') as video_file:
+        video_data = video_file.read()
 
     # Upload the annotated video to Google Cloud Storage
-    video_output_link = upload_to_cloud_storage(local_video_output_path, bucket_name)
+    video_output_link = upload_to_cloud_storage(io.BytesIO(video_data), bucket_name, f'{video_output_path}')
 
     # Serialize objects_detected_list to JSON
     objects_detected_json = json.dumps(objects_detected_list, indent=4)
 
     # Define the file name for the JSON file
-    json_output_filename = f"video-detection/{video_output_path}_summary.json"
+    json_output_filename = f"video-detection/{video_filename}_summary.json"
 
+    # Upload the summary JSON to Google Cloud Storage
     # Create a GCS blob and upload the JSON file directly
     json_blob = bucket.blob("uploads/" + json_output_filename)
     json_blob.upload_from_string(objects_detected_json, content_type='application/json')
+
+    # Set the object's ACL to make it publicly accessible
+    json_blob.acl.all().grant_read()
+    json_blob.acl.save()
 
     return {
         'objects_detected_list': objects_detected_list,
@@ -277,24 +309,24 @@ def process_video(model, video_filename, video_output_path, bucket_name):
         'json_output_link': json_blob.public_url
     }
 
-def summary_video(objects_detected_list):
-    merged_objects_detected_list = {}
-    for item in objects_detected_list:
-        for key, value in item.items():
-            if key in merged_objects_detected_list:
-                merged_objects_detected_list[key]["confidence_sum"] += value["confidence_sum"]
-                merged_objects_detected_list[key]["count"] += value["count"]
-            else:
-                merged_objects_detected_list[key] = value
+# def summary_video(objects_detected_list):
+#     merged_objects_detected_list = {}
+#     for item in objects_detected_list:
+#         for key, value in item.items():
+#             if key in merged_objects_detected_list:
+#                 merged_objects_detected_list[key]["confidence_sum"] += value["confidence_sum"]
+#                 merged_objects_detected_list[key]["count"] += value["count"]
+#             else:
+#                 merged_objects_detected_list[key] = value
 
-    for key, value in merged_objects_detected_list.items():
-        confidence_sum = value["confidence_sum"]
-        count = value["count"]
-        average_confidence = (confidence_sum / count) * 100
-        value["average_confidence"] = f"{average_confidence:.2f}%"
+#     for key, value in merged_objects_detected_list.items():
+#         confidence_sum = value["confidence_sum"]
+#         count = value["count"]
+#         average_confidence = (confidence_sum / count) * 100
+#         value["average_confidence"] = f"{average_confidence:.2f}%"
 
-    summary_objects_detected_list = [{key: value} for key, value in merged_objects_detected_list.items()]
-    return summary_objects_detected_list
+#     summary_objects_detected_list = [{key: value} for key, value in merged_objects_detected_list.items()]
+#     return summary_objects_detected_list
 
 def save_summary_video(json_output_path, objects_detected_list):
     with open(json_output_path, 'w') as json_file:

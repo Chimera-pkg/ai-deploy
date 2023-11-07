@@ -1,12 +1,13 @@
 import os
 import flask
 from flask import Flask, request, jsonify
-from helpers import load_model, process_image, save_summary_image, process_video, summary_video, save_summary_video, upload_to_cloud_storage
+from helpers import load_model, process_image, process_video, upload_to_cloud_storage
 from urllib.parse import quote
 import fileapp
 from google.cloud import storage
 import os
 import io
+import uvicorn
 
 os.environ['GOOGLE_CLOUD_PROJECT'] = 'roads-404204'
 app = Flask(__name__)
@@ -20,7 +21,6 @@ def detect_image(image_filename):
     base_path, _ = os.path.splitext(image_filename)
     image_output_path = os.path.join('image-detection', f'{base_path}_output{_}')
 
-    # try:
     model = load_model()
     objects_detected_data = process_image(model, image_filename, image_output_path)
     image_output_link = objects_detected_data['image_output_link']
@@ -34,25 +34,17 @@ def detect_image(image_filename):
     }
     return jsonify(response)
 
-    # except Exception as e:
-    #     # Log the exception for debugging
-    #     print(f"Error during road damage detection: {str(e)}")
-    #     return jsonify({'error': 'Road damage detection failed'}), 500
-
 @app.route('/detect_video/<video_filename>', methods=['GET', 'POST'])
 def detect_video(video_filename):
     # Define the path for saving the annotated video and JSON
     base_path, _ = os.path.splitext(video_filename)
     output_suffix = '_output'
-    summary_suffix = '_summary'
     
     video_output_path = os.path.join('video-detection', f'{base_path}{output_suffix}{_}')
-    json_output_path = os.path.join('video-detection', f'{base_path}{summary_suffix}.json')
 
-    # try:
     model = load_model()
     objects_detected_data = process_video(model, video_filename, video_output_path, bucket_name)
-    video_output_link = objects_detected_data['image_output_link']
+    video_output_link = objects_detected_data['video_output_link']
     objects_detected_list = objects_detected_data['objects_detected_list']
     json_output_link = objects_detected_data['json_output_link']
 
@@ -62,9 +54,6 @@ def detect_video(video_filename):
         'json_output_link': json_output_link,
     }
     return jsonify(response)
-
-    # except FileNotFoundError:
-    #     return jsonify({'error': 'File not found'}), 400
 
 def upload_chunk_to_gcs(blob, chunk):
     # Upload a chunk to Google Cloud Storage
@@ -133,5 +122,6 @@ def upload_to_gcs(file_data, filename):
     blob.upload_from_file(file_data, content_type='application/octet-stream')
  
 if __name__ == '__main__':
-    app.run(debug=True)
+    # app.run(debug=True)
+    uvicorn.run(app, host='0.0.0.0', port=8000)
     
