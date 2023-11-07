@@ -1,7 +1,7 @@
 import os
 import flask
 from flask import Flask, request, jsonify
-from helpers import load_model, process_image, process_video
+from helpers import load_model, process_image, process_video, upload_to_cloud_storage
 from urllib.parse import quote
 import fileapp
 from google.cloud import storage
@@ -122,6 +122,17 @@ def upload_to_gcs(file_data, filename):
     blob.upload_from_file(file_data, content_type='application/octet-stream')
  
 if __name__ == '__main__':
-    app.run(debug=True)
-    # uvicorn.run(app, host='0.0.0.0', port=8000)
-    
+    from gunicorn.app.base import Application
+
+    class FlaskApplication(Application):
+        def init(self, parser, opts, args):
+            return {
+                'bind': '0.0.0.0:8000',  # Specify the host and port for your application
+                'workers': 4,  # You can adjust the number of workers as needed
+                'worker_class': 'gevent',  # Use 'gevent' for asynchronous support
+            }
+
+        def load(self):
+            return app
+
+    FlaskApplication().run()
