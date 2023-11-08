@@ -13,13 +13,13 @@ def load_model():
     model_path = os.path.join('models', 'best_rdd_final.pt')
     return YOLO(model_path)
 
-def download_from_cloud_storage(remote_file_name, local_file_name, bucket_name):
+async def download_from_cloud_storage(remote_file_name, local_file_name, bucket_name):
     client = storage.Client.from_service_account_json('roads-404204.json')
     bucket = client.bucket(bucket_name)
     blob = bucket.blob("uploads/" + remote_file_name)
-    blob.download_to_filename(local_file_name)
+    await blob.download_to_filename(local_file_name)
 
-def process_image(model, image_filename, image_output_filename):
+async def process_image(model, image_filename, image_output_filename):
     # Replace 'your-bucket-name' with your actual Google Cloud Storage bucket name
     bucket_name = 'asia.artifacts.roads-404204.appspot.com'
 
@@ -30,7 +30,7 @@ def process_image(model, image_filename, image_output_filename):
     local_image_path = os.path.join(tmp_dir, image_filename)
 
     # Download the image from Google Cloud Storage to the temporary directory
-    download_from_cloud_storage(image_filename, local_image_path, bucket_name)
+    await download_from_cloud_storage(image_filename, local_image_path, bucket_name)
 
     # Initialize the Google Cloud Storage client
     storage_client = storage.Client.from_service_account_json('roads-404204.json')
@@ -115,7 +115,7 @@ def process_image(model, image_filename, image_output_filename):
     #             os.remove(file_path)
     #         os.rmdir(tmp_dir)
 
-def upload_to_cloud_storage(local_path, bucket_name, cloud_path):
+async def upload_to_cloud_storage(local_path, bucket_name, cloud_path):
     """Upload a file to Google Cloud Storage.
 
     Args:
@@ -144,7 +144,7 @@ def upload_to_cloud_storage(local_path, bucket_name, cloud_path):
     # Return the public URL of the uploaded file
     return blob.public_url
 
-def process_video(model, video_filename, video_output_path, bucket_name):
+async def process_video(model, video_filename, video_output_path, bucket_name):
     # Create a temporary directory for the video
     tmp_dir = tempfile.mkdtemp()
     
@@ -241,7 +241,7 @@ def process_video(model, video_filename, video_output_path, bucket_name):
     json_blob.acl.save()
 
     # Upload the annotated video to Google Cloud Storage
-    video_output_link = upload_to_cloud_storage(local_video_output_path, bucket_name)
+    video_output_link = await upload_to_cloud_storage(local_video_output_path, bucket_name)
 
     return {
         'objects_detected_list': objects_detected_list,
@@ -256,7 +256,7 @@ def process_video(model, video_filename, video_output_path, bucket_name):
     #             os.remove(file_path)
     #         os.rmdir(tmp_dir)
 
-def upload_to_cloud_storage(image_output_filename, bucket_name):
+async def upload_to_cloud_storage(image_output_filename, bucket_name):
     client = storage.Client.from_service_account_json('roads-404204.json')
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(f"uploads/{image_output_filename}")

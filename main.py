@@ -1,5 +1,6 @@
 import os
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from helpers import load_model, process_image, process_video
 from urllib.parse import quote
 from google.cloud import storage
@@ -9,6 +10,7 @@ import io
 
 os.environ['GOOGLE_CLOUD_PROJECT'] = 'roads-404204'
 app = Flask(__name__)
+CORS(app, resources={r"/": {"origins": ["http://localhost:3000", "https://roadinspecx.x-camp.id/", "https://testingapirdd.x-camp.id/"]}})
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 3600  # Set the timeout to 1 hour (in seconds)
 app.config['MAX_CONTENT_LENGTH'] = 2147483648   # 2GB limit
 bucket_name = 'asia.artifacts.roads-404204.appspot.com'
