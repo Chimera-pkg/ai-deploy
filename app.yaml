@@ -1,9 +1,9 @@
 runtime: python38
 entrypoint: gunicorn -b :$PORT main:app
-instance_class: F2
+instance_class: F4_1G
 
 env_variables:
-  MODEL_PATH: 'models/best_rdd_final.pt'
+  MODEL_PATH: 'models/best_rdd_final2.pt'
 
 automatic_scaling:
   target_cpu_utilization: 0.65

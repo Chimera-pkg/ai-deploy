@@ -1,19 +1,102 @@
 import os
+import mimetypes
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from helpers import load_model, process_image, process_video
 from urllib.parse import quote
 from google.cloud import storage
-import os
-import io
-# import uvicorn
+from google.auth.transport.requests import AuthorizedSession
+from google.resumable_media import requests, common
 
 os.environ['GOOGLE_CLOUD_PROJECT'] = 'roads-404204'
 app = Flask(__name__)
-CORS(app, resources={r"/": {"origins": ["http://localhost:3000", "https://roadinspecx.x-camp.id/", "https://testingapirdd.x-camp.id/"]}})
+# Define CORS policy
+CORS(
+    app,
+    supports_credentials=True,
+    origins=[
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'https://testingapirdd.x-camp.id',
+        'https://roadinspecx.x-camp.id'
+    ],
+    methods=['GET', 'POST'],
+    allowed_headers=['Content-Type', ''],
+)
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 3600  # Set the timeout to 1 hour (in seconds)
 app.config['MAX_CONTENT_LENGTH'] = 2147483648   # 2GB limit
 bucket_name = 'asia.artifacts.roads-404204.appspot.com'
+
+class GCSObjectStreamUpload(object):
+    def __init__(
+            self, 
+            client: storage.Client,
+            bucket_name: str,
+            blob_name: str,
+            chunk_size: int=256 * 1024
+        ):
+        self._client = client
+        self._bucket = self._client.bucket(bucket_name)
+        self._blob = self._bucket.blob(blob_name)
+        self._buffer = b''
+        self._buffer_size = 0
+        self._chunk_size = chunk_size
+        self._read = 0
+        self._transport = AuthorizedSession(
+            credentials=self._client._credentials
+        )
+        self._request = None  # type: requests.ResumableUpload
+
+    def __enter__(self):
+        self.start()
+        return self
+    
+    def __exit__(self, exc_type, *_):
+        if exc_type is None:
+            self.stop()
+            
+    def start(self):
+        url = (
+            f'https://www.googleapis.com/upload/storage/v1/b/'
+            f'{self._bucket.name}/o?uploadType=resumable'
+        )
+        self._request = requests.ResumableUpload(
+            upload_url=url, chunk_size=self._chunk_size
+        )
+        self._request.initiate(
+            transport=self._transport,
+            content_type='application/octet-stream',
+            stream=self,
+            stream_final=False,
+            metadata={'name': self._blob.name},
+        )
+        
+    def stop(self):
+        self._request.transmit_next_chunk(self._transport)
+        
+    def write(self, data: bytes) -> int:
+        data_len = len(data)
+        self._buffer_size += data_len
+        self._buffer += data
+        del data
+        while self._buffer_size >= self._chunk_size:
+            try:
+                self._request.transmit_next_chunk(self._transport)
+            except common.InvalidResponse:
+                self._request.recover(self._transport)
+        return data_len
+    
+    def read(self, chunk_size: int) -> bytes:
+        # I'm not good with efficient no-copy buffering so if this is
+        # wrong or there's a better way to do this let me know! :-)
+        to_read = min(chunk_size, self._buffer_size)
+        memview = memoryview(self._buffer)
+        self._buffer = memview[to_read:].tobytes()
+        self._read += to_read
+        self._buffer_size -= to_read
+        return memview[:to_read].tobytes()
+    def tell(self) -> int:
+        return self._read
 
 @app.route('/detect_image/<image_filename>', methods=['GET', 'POST'])
 def detect_image(image_filename):
@@ -60,7 +143,7 @@ def upload_chunk_to_gcs(blob, chunk):
     blob.upload_from_string(chunk)
 
 @app.route('/upload', methods=['POST'])
-def upload():
+def upload_resumable():
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'No file part'}), 400
@@ -68,26 +151,29 @@ def upload():
         if uploaded_file.filename == '':
             return jsonify({'error': 'No selected file'}), 400
         if uploaded_file:
-            # Convert the filename to a URL-friendly format
-            filename = quote(uploaded_file.filename)
+            blob_name = "uploads/" + uploaded_file.filename
             
-            gcs_client = storage.Client.from_service_account_json('roads-404204.json')
-            storage_bucket = gcs_client.get_bucket(bucket_name)
-            blob = storage_bucket.blob("uploads/"+uploaded_file.filename)
-
-            chunk_size = 30 * 1024 * 1024  # 10 MB (adjust as needed)
-            chunk = uploaded_file.read(chunk_size)
-
-            while chunk:
-                upload_chunk_to_gcs(blob, chunk)
-                chunk = uploaded_file.read(chunk_size)
-
+            client = storage.Client.from_service_account_json('roads-404204.json')
+            with GCSObjectStreamUpload(client=client, bucket_name=bucket_name, blob_name=blob_name) as s:
+                while True:
+                    chunk = uploaded_file.read(s._chunk_size)
+                    if not chunk:
+                        break
+                    s.write(chunk)
+                    
             # Set the object's ACL to make it publicly accessible
-            blob.acl.all().grant_read()
-            blob.acl.save()
+            s._blob.acl.all().grant_read()
+            s._blob.acl.save()
 
+            # Set Content-Disposition header to show the preview in the browser
+            s._blob.content_disposition = "inline"
+            
+            # Set the content type based on the file extension or specify a generic type
+            content_type, _ = mimetypes.guess_type(uploaded_file.filename)
+            s._blob.content_type = content_type or 'application/octet-stream'
+            
             response = {
-                'url': blob.public_url
+                'url': s._blob.public_url
             }
             return jsonify(response)
 
@@ -95,33 +181,7 @@ def upload():
         # Log the exception for debugging
         print(f"Error during file upload: {str(e)}")
         return jsonify({'error': 'File upload failed'}), 500
-   
-@app.route('/upload-chunk', methods=['POST'])
-def upload_chunk():
-    if 'file' in request.files:
-        chunk = request.files['file'].read()
-        filename = request.files['file'].filename
-        save_chunk(chunk, filename)
-        return 'Chunk uploaded successfully', 200
-    else:
-        return 'No file part in the request', 400
 
-def save_chunk(chunk, filename):
-    if 'file_data' not in save_chunk.__dict__:
-        save_chunk.file_data = io.BytesIO()
-    save_chunk.file_data.write(chunk)
-
-    save_chunk.file_data.seek(0)
-    upload_to_gcs(save_chunk.file_data, filename)
-
-def upload_to_gcs(file_data, filename):
-    client = storage.Client.from_service_account_json('roads-404204.json')
-    CHUNK_SIZE = 1024 * 1024 * 30
-    bucket = client.get_bucket(bucket_name)
-    blob = bucket.blob(f'uploads/{filename}', chunk_size=CHUNK_SIZE)
-    blob.upload_from_file(file_data, content_type='application/octet-stream')
- 
 if __name__ == '__main__':
     app.run(debug=True)
-    # uvicorn.run(app, host='0.0.0.0', port=8000)
     
