@@ -1,12 +1,19 @@
-runtime: python38
+runtime: python
+runtime_config:
+  operating_system: "ubuntu18"
+  runtime_version: "3.8"
+
+timeout: 3600s
+
 entrypoint: gunicorn -b :$PORT main:app
-instance_class: F4_1G
 
 env_variables:
   MODEL_PATH: 'models/best_rdd_final2.pt'
 
-automatic_scaling:
-  target_cpu_utilization: 0.65
+env: flex
+resources:
+  cpu: 4
+  memory_gb: 8
 
 handlers:
   - url: /static

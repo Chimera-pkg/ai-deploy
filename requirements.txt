@@ -1,3 +1,4 @@
+pip>=20.3.4
 brotli==1.1.0
 ConfigParser==6.0.0
 cryptography>=41.0.5,<42
@@ -20,4 +21,3 @@ ultralytics==8.0.203
 google-cloud-storage==2.9.0
 flask-cors==4.0.0
 google-resumable-media==2.5.0
-gevent==21.8.0
